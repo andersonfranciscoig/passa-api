@@ -24,8 +24,8 @@ async function bootstrap() {
     setupSwagger(app);
   }
 
-  await app.listen(config.port);
-  console.log(`PASSA API em http://localhost:${config.port}/api/v1  (docs: /docs)`);
+  await app.listen(config.port, "0.0.0.0");
+  console.log(`PASSA API em http://0.0.0.0:${config.port}/api/v1`);
 }
 
 void bootstrap();
