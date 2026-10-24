@@ -7,7 +7,7 @@ export class MemoryFileStorage extends FileStorage {
     const key = `${folder.replace(/[^a-zA-Z0-9-]+/g, "_")}_${file.name}`;
     const stored: StoredFile = {
       key,
-      url: `https://files.passa.local/${key}`,
+      url: `data:${file.contentType};base64,${Buffer.from(file.data).toString("base64")}`,
       name: file.name,
       size: file.data.byteLength,
       contentType: file.contentType,
