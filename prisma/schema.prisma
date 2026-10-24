@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum InviteStatus {
+  invited
+  accepted
+  revoked
+}
+
+/// Conta de autenticação. O perfil público vive nos mesmos campos neste recorte.
+model User {
+  id           String     @id @db.Uuid
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  displayName  String     @map("display_name")
+  phone        String?    @unique
+  province     String?
+  municipality String?
+  neighborhood String?
+  bio             String?
+  avatarUrl       String?    @map("avatar_url")
+  phoneVerifiedAt DateTime?  @map("phone_verified_at") @db.Timestamptz(3)
+  role            UserRole   @default(USER)
+  status          UserStatus @default(ACTIVE)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  contactVerification ContactVerification?
+
+  acceptedInvite     BetaInvite?            @relation("AcceptedInvite")
+  sentInvites        BetaInvite[]           @relation("InvitedBy")
+  listings           Listing[]
+  reportsFiled       Report[]               @relation("Reporter")
+  promotionRequests  PromotionRequest[]
+  payments           PaymentRecord[]
+  subscriptions      Subscription[]
+
+  @@map("users")
+}
+
+/// Código enviado por email para confirmar o telemóvel do perfil.
+model ContactVerification {
+  userId    String   @id @map("user_id") @db.Uuid
+  phone     String
+  code      String
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("contact_verifications")
+}
+
+/// Resposta ao inquérito de validação. Uma por email ou telemóvel.
+model SurveyResponse {
+  id          String   @id @db.Uuid
+  version     String
+  name        String?
+  email       String?
+  phone       String?
+  answers     Json
+  betaConsent Boolean  @default(false) @map("beta_consent")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  invite BetaInvite?
+
+  @@unique([email])
+  @@unique([phone])
+  @@map("survey_responses")
+}
+
+/// Singleton: o beta está fechado ou aberto a todos.
+model BetaSettings {
+  id         Boolean   @id @default(true)
+  closedBeta Boolean   @default(true) @map("closed_beta")
+  openedAt   DateTime? @map("opened_at") @db.Timestamptz(3)
+  openedById String?   @map("opened_by") @db.Uuid
+
+  @@map("beta_settings")
+}
+
+model BetaInvite {
+  id             String       @id @db.Uuid
+  email          String?
+  phone          String?
+  name           String?
+  responseId     String?      @unique @map("response_id") @db.Uuid
+  status         InviteStatus @default(invited)
+  invitedById    String       @map("invited_by") @db.Uuid
+  invitedAt      DateTime     @default(now()) @map("invited_at") @db.Timestamptz(3)
+  acceptedUserId String?      @unique @map("accepted_user_id") @db.Uuid
+  acceptedAt     DateTime?    @map("accepted_at") @db.Timestamptz(3)
+  revokedAt      DateTime?    @map("revoked_at") @db.Timestamptz(3)
+
+  response     SurveyResponse? @relation(fields: [responseId], references: [id], onDelete: SetNull)
+  invitedBy    User            @relation("InvitedBy", fields: [invitedById], references: [id])
+  acceptedUser User?           @relation("AcceptedInvite", fields: [acceptedUserId], references: [id])
+
+  @@map("beta_invites")
+}
+
+model Listing {
+  id             String    @id @db.Uuid
+  sellerId       String    @map("seller_id") @db.Uuid
+  title          String
+  slug           String    @unique
+  description    String    @default("")
+  category       String
+  condition      String
+  terms          Json
+  status         String    @default("draft")
+  whatsappEnabled Boolean  @default(false) @map("whatsapp_enabled")
+  whatsappPhone  String?   @map("whatsapp_phone")
+  province       String
+  municipality   String
+  neighborhood   String?
+  viewCount      Int       @default(0) @map("view_count")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  publishedAt    DateTime? @map("published_at") @db.Timestamptz(3)
+
+  seller   User           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  images   ListingImage[]
+  reports  Report[]
+
+  @@map("listings")
+}
+
+model ListingImage {
+  id        String @id @db.Uuid
+  listingId String @map("listing_id") @db.Uuid
+  ref       String
+  position  Int
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@map("listing_images")
+}
+
+model Report {
+  id             String    @id @db.Uuid
+  reporterId     String    @map("reporter_id") @db.Uuid
+  listingId      String    @map("listing_id") @db.Uuid
+  reason         String
+  details        String?
+  status         String    @default("open")
+  reviewedAt     DateTime? @map("reviewed_at") @db.Timestamptz(3)
+  reviewedBy     String?   @map("reviewed_by") @db.Uuid
+  resolutionNote String?   @map("resolution_note")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reporter User    @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  listing  Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+model Conversation {
+  id        String    @id @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  messages  Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @db.Uuid
+  conversationId String       @map("conversation_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model MonetizationPlan {
+  id           String   @id @db.Uuid
+  kind         String
+  name         String
+  description  String   @default("")
+  durationDays Int      @map("duration_days")
+  priceAoa     Int      @map("price_aoa")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("monetization_plans")
+}
+
+model MonetizationSettings {
+  id                       Boolean @id @default(true)
+  promotionsEnabled        Boolean @default(true) @map("promotions_enabled")
+  paidPromotionsEnabled    Boolean @default(false) @map("paid_promotions_enabled")
+  homeSlots                Int     @default(8) @map("home_slots")
+  paidSubscriptionsEnabled Boolean @default(false) @map("paid_subscriptions_enabled")
+  paymentProvider          String  @default("none") @map("payment_provider")
+  referenceEntity          String  @default("00930") @map("reference_entity")
+  referenceTtlHours        Int     @default(48) @map("reference_ttl_hours")
+
+  @@map("monetization_settings")
+}
+
+model PromotionRequest {
+  id              String    @id @db.Uuid
+  listingId       String    @map("listing_id") @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  planId          String    @map("plan_id") @db.Uuid
+  planName        String    @map("plan_name")
+  planPriceAoa    Int       @map("plan_price_aoa")
+  durationDays    Int       @map("duration_days")
+  status          String    @default("pending")
+  paymentMethod   String    @default("none") @map("payment_method")
+  paymentStatus   String    @default("not_required") @map("payment_status")
+  promotionSource String    @default("free_pilot") @map("promotion_source")
+  requestedAt     DateTime  @default(now()) @map("requested_at") @db.Timestamptz(3)
+  reviewedAt      DateTime? @map("reviewed_at") @db.Timestamptz(3)
+  approvedBy      String?   @map("approved_by") @db.Uuid
+  startsAt        DateTime? @map("starts_at") @db.Timestamptz(3)
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz(3)
+  reviewNote      String?   @map("review_note")
+  endedReason     String?   @map("ended_reason")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("promotion_requests")
+}
+
+model PaymentRecord {
+  id                String    @id @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  targetType        String    @map("target_type")
+  targetId          String    @map("target_id") @db.Uuid
+  description       String
+  amountAoa         Int       @map("amount_aoa")
+  currency          String    @default("AOA")
+  provider          String
+  method            String    @default("reference")
+  entity            String
+  reference         String
+  providerReference String    @unique @map("provider_reference")
+  status            String    @default("pending")
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(3)
+  paidAt            DateTime? @map("paid_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payment_records")
+}
+
+model Subscription {
+  id            String    @id @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  planId        String    @map("plan_id") @db.Uuid
+  planName      String    @map("plan_name")
+  priceAoa      Int       @map("price_aoa")
+  durationDays  Int       @map("duration_days")
+  status        String    @default("pending")
+  source        String    @default("free_pilot")
+  paymentStatus String    @default("not_required") @map("payment_status")
+  requestedAt   DateTime  @default(now()) @map("requested_at") @db.Timestamptz(3)
+  reviewedAt    DateTime? @map("reviewed_at") @db.Timestamptz(3)
+  reviewedBy    String?   @map("reviewed_by") @db.Uuid
+  startsAt      DateTime? @map("starts_at") @db.Timestamptz(3)
+  expiresAt     DateTime? @map("expires_at") @db.Timestamptz(3)
+  note          String?
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model MonetizationAuditLog {
+  id         String   @id @db.Uuid
+  actorId    String   @map("actor_id")
+  action     String
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  details    Json
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("monetization_audit_logs")
+}

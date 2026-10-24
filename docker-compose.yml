@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: passa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: passa
+      POSTGRES_PASSWORD: passa
+      POSTGRES_DB: passa
+    # 5434 para não colidir com o PostgreSQL local (5432) nem com o portal (5433).
+    ports:
+      - "5434:5432"
+    volumes:
+      - passa-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U passa -d passa"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  passa-postgres:
