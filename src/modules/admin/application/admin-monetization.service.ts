@@ -90,10 +90,30 @@ export class AdminMonetizationService {
 
   async listPlansPublic() {
     const plans = await this.prisma.monetizationPlan.findMany({
-      where: { isActive: true, kind: "promotion" },
+      where: { isActive: true },
       orderBy: { durationDays: "asc" },
     });
     return plans.map(planView);
+  }
+
+  async listMinePromotions(userId: string) {
+    const all = await this.sweepPromotions();
+    return all
+      .filter((r) => r.userId === userId)
+      .sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime())
+      .map(promotionView);
+  }
+
+  async listMineSubscriptions(userId: string) {
+    const now = this.clock.now();
+    const rows = await this.prisma.subscription.findMany({ where: { userId } });
+    const refreshed: Subscription[] = [];
+    for (const s of rows) {
+      const next = this.refreshSubscription(s, now);
+      if (next !== s) await this.prisma.subscription.update({ where: { id: s.id }, data: { status: "expired" } });
+      refreshed.push(next);
+    }
+    return refreshed.sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime()).map(subscriptionView);
   }
 
   async adminListPlans() {

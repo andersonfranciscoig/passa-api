@@ -11,6 +11,7 @@ import { AdminInsightsController } from "./presentation/http/admin-insights.cont
 import { AdminModerationController } from "./presentation/http/admin-moderation.controller";
 import { AdminMonetizationController } from "./presentation/http/admin-monetization.controller";
 import { AdminUsersController } from "./presentation/http/admin-users.controller";
+import { PlansController, PromotionsController, SubscriptionsController } from "./presentation/http/public-monetization.controller";
 
 @Module({
   controllers: [
@@ -20,6 +21,9 @@ import { AdminUsersController } from "./presentation/http/admin-users.controller
     AdminIdentityController,
     AdminMonetizationController,
     AdminUsersController,
+    PlansController,
+    PromotionsController,
+    SubscriptionsController,
   ],
   providers: [AdminInsightsService, AdminCatalogService, AdminModerationService, AdminIdentityService, AdminMonetizationService],
 })

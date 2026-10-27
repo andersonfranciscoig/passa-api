@@ -13,6 +13,8 @@ import type {
 
 export type ListingRow = Listing & { images: ListingImage[] };
 
+export type ListingView = ReturnType<typeof listingView>;
+
 export function listingView(row: ListingRow) {
   return {
     id: row.id,
