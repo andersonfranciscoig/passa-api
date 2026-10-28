@@ -17,7 +17,7 @@ const STATUS: Record<DomainErrorKind, HttpStatus> = {
 export class DomainErrorFilter implements ExceptionFilter {
   catch(error: DomainError, host: ArgumentsHost) {
     const response = host.switchToHttp().getResponse<Response>();
-    const status = STATUS[error.kind];
+    const status = STATUS[error.kind] ?? HttpStatus.INTERNAL_SERVER_ERROR;
     response.status(status).json({
       statusCode: status,
       code: error.code,

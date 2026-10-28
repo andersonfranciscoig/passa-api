@@ -43,6 +43,53 @@ async function main() {
     update: {},
   });
 
+  const defaultPlans = [
+    {
+      kind: "subscription",
+      name: "PASSA Pro",
+      description: "Estatísticas avançadas (90 dias, funil, público, horas de pico), efeito dos destaques e exportação.",
+      durationDays: 30,
+      priceAoa: 3500,
+    },
+    {
+      kind: "promotion",
+      name: "Destaque Básico",
+      description: "3 dias na secção de destaques da página inicial.",
+      durationDays: 3,
+      priceAoa: 500,
+    },
+    {
+      kind: "promotion",
+      name: "Destaque Plus",
+      description: "7 dias em destaque na página inicial e no topo dos resultados.",
+      durationDays: 7,
+      priceAoa: 1000,
+    },
+    {
+      kind: "promotion",
+      name: "Destaque Pro",
+      description: "14 dias em destaque — ideal para artigos de valor mais alto.",
+      durationDays: 14,
+      priceAoa: 2000,
+    },
+  ] as const;
+
+  for (const plan of defaultPlans) {
+    const found = await prisma.monetizationPlan.findFirst({ where: { kind: plan.kind, name: plan.name } });
+    if (found) continue;
+    await prisma.monetizationPlan.create({
+      data: {
+        id: crypto.randomUUID(),
+        kind: plan.kind,
+        name: plan.name,
+        description: plan.description,
+        durationDays: plan.durationDays,
+        priceAoa: plan.priceAoa,
+        isActive: true,
+      },
+    });
+  }
+
   console.log(`Seed OK. Única conta: ${adminEmail} (ADMIN)`);
 }
 

@@ -37,6 +37,28 @@ export const grantPromotionSchema = z.object({
 });
 export type GrantPromotionBody = z.infer<typeof grantPromotionSchema>;
 
+export const requestPromotionSchema = z.object({
+  listingId: z.string().uuid(),
+  planId: z.string().uuid(),
+});
+export type RequestPromotionBody = z.infer<typeof requestPromotionSchema>;
+
+export const featuredQuerySchema = z.object({
+  mode: z.enum(["home", "search", "category"]).optional(),
+  category: z.string().optional(),
+  q: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(48).optional(),
+});
+export type FeaturedQuery = z.infer<typeof featuredQuerySchema>;
+
+export const simulatePaymentSchema = z.object({
+  entity: z.string().min(1),
+  reference: z.string().min(1),
+  amountAoa: z.number().int().positive(),
+  pin: z.string().regex(/^\d{4}$/),
+});
+export type SimulatePaymentBody = z.infer<typeof simulatePaymentSchema>;
+
 export const savePlanSchema = z.object({
   id: z.string().uuid().nullable().optional(),
   kind: z.enum(["promotion", "subscription"]).optional(),

@@ -5,6 +5,15 @@ import { Clock } from "../../../shared/domain/clock";
 import { IdGenerator } from "../../../shared/domain/id-generator";
 import { PrismaService } from "../../../shared/infrastructure/database/prisma.service";
 import { AdminValidationError, ConflictError, ForbiddenError, InvalidStateError, NotFoundError } from "../domain/errors";
+import {
+  activationAllowed,
+  isOpenPromotion,
+  paidCheckoutEnabled,
+  promotionWindows,
+  refreshPromotion,
+  sandboxReference,
+  selectFeaturedListingIds,
+} from "../domain/promotion";
 import { auditView, paymentView, planView, promotionView, settingsView, subscriptionView } from "./views";
 
 const DAY_MS = 86_400_000;
@@ -18,6 +27,43 @@ const DEFAULT_SETTINGS = {
   referenceEntity: "00930",
   referenceTtlHours: 48,
 };
+
+const DEFAULT_PLANS: Array<{
+  kind: string;
+  name: string;
+  description: string;
+  durationDays: number;
+  priceAoa: number;
+}> = [
+  {
+    kind: "subscription",
+    name: "PASSA Pro",
+    description: "Estatísticas avançadas (90 dias, funil, público, horas de pico), efeito dos destaques e exportação.",
+    durationDays: 30,
+    priceAoa: 3500,
+  },
+  {
+    kind: "promotion",
+    name: "Destaque Básico",
+    description: "3 dias na secção de destaques da página inicial.",
+    durationDays: 3,
+    priceAoa: 500,
+  },
+  {
+    kind: "promotion",
+    name: "Destaque Plus",
+    description: "7 dias em destaque na página inicial e no topo dos resultados.",
+    durationDays: 7,
+    priceAoa: 1000,
+  },
+  {
+    kind: "promotion",
+    name: "Destaque Pro",
+    description: "14 dias em destaque — ideal para artigos de valor mais alto.",
+    durationDays: 14,
+    priceAoa: 2000,
+  },
+];
 
 @Injectable()
 export class AdminMonetizationService {
@@ -51,13 +97,6 @@ export class AdminMonetizationService {
     return row ? { userName: row.displayName, userEmail: row.email } : {};
   }
 
-  private refreshPromotion(r: PromotionRequest, now: Date): PromotionRequest {
-    let status = r.status;
-    if ((r.status === "approved" || r.status === "active") && r.expiresAt && r.expiresAt <= now) status = "expired";
-    else if (r.status === "approved" && r.startsAt && r.startsAt <= now) status = "active";
-    return status === r.status ? r : { ...r, status, updatedAt: now, endedReason: status === "expired" ? "Prazo terminado." : r.endedReason };
-  }
-
   private refreshSubscription(s: Subscription, now: Date): Subscription {
     return s.status === "active" && s.expiresAt && s.expiresAt <= now ? { ...s, status: "expired", updatedAt: now } : s;
   }
@@ -65,13 +104,44 @@ export class AdminMonetizationService {
   private async sweepPromotions() {
     const now = this.clock.now();
     const all = await this.prisma.promotionRequest.findMany();
+    const listingIds = [...new Set(all.map((r) => r.listingId))];
+    const listings = listingIds.length
+      ? await this.prisma.listing.findMany({
+          where: { id: { in: listingIds } },
+          select: { id: true, status: true, seller: { select: { status: true } } },
+        })
+      : [];
+    const listingById = new Map(listings.map((l) => [l.id, l]));
     const next: PromotionRequest[] = [];
     for (const r of all) {
-      const refreshed = this.refreshPromotion(r, now);
-      if (refreshed !== r) {
+      let refreshed = refreshPromotion(r, now);
+      if (isOpenPromotion(refreshed.status)) {
+        const listing = listingById.get(r.listingId);
+        const eligible = listing?.status === "published" && listing.seller.status === "ACTIVE";
+        if (!eligible) {
+          refreshed = {
+            ...refreshed,
+            status: "cancelled",
+            endedReason: "O anúncio deixou de estar publicado.",
+            expiresAt: refreshed.status === "active" ? now : refreshed.expiresAt,
+            updatedAt: now,
+          };
+          await this.log("system", "promotion.auto_ended", "promotion_request", r.id, { listingId: r.listingId });
+        }
+      }
+      if (
+        refreshed.status !== r.status ||
+        refreshed.endedReason !== r.endedReason ||
+        refreshed.expiresAt?.getTime() !== r.expiresAt?.getTime()
+      ) {
         await this.prisma.promotionRequest.update({
           where: { id: r.id },
-          data: { status: refreshed.status, endedReason: refreshed.endedReason, updatedAt: now },
+          data: {
+            status: refreshed.status,
+            endedReason: refreshed.endedReason,
+            expiresAt: refreshed.expiresAt,
+            updatedAt: now,
+          },
         });
       }
       next.push(refreshed);
@@ -88,7 +158,30 @@ export class AdminMonetizationService {
     return days;
   }
 
+  /** Cria os planos do piloto se ainda não existirem (não reativa planos desligados à mão). */
+  private async ensureDefaultPlans() {
+    const existing = await this.prisma.monetizationPlan.findMany({ select: { kind: true, name: true } });
+    const names = new Set(existing.map((p) => `${p.kind}:${p.name}`));
+    const now = this.clock.now();
+    for (const plan of DEFAULT_PLANS) {
+      if (names.has(`${plan.kind}:${plan.name}`)) continue;
+      await this.prisma.monetizationPlan.create({
+        data: {
+          id: this.ids.next(),
+          kind: plan.kind,
+          name: plan.name,
+          description: plan.description,
+          durationDays: plan.durationDays,
+          priceAoa: plan.priceAoa,
+          isActive: true,
+          createdAt: now,
+        },
+      });
+    }
+  }
+
   async listPlansPublic() {
+    await this.ensureDefaultPlans();
     const plans = await this.prisma.monetizationPlan.findMany({
       where: { isActive: true },
       orderBy: { durationDays: "asc" },
@@ -117,6 +210,7 @@ export class AdminMonetizationService {
   }
 
   async adminListPlans() {
+    await this.ensureDefaultPlans();
     const plans = await this.prisma.monetizationPlan.findMany({ orderBy: { durationDays: "asc" } });
     return plans.map(planView);
   }
@@ -138,6 +232,9 @@ export class AdminMonetizationService {
     const listing = await this.prisma.listing.findUnique({ where: { id: r.listingId } });
     if (!listing || listing.status !== "published") {
       throw new InvalidStateError("O anúncio já não está publicado e não pode ser destacado.");
+    }
+    if (!activationAllowed(r)) {
+      throw new InvalidStateError("O pagamento deste pedido ainda não foi verificado pelo fornecedor de pagamentos.");
     }
     const now = this.clock.now();
     const days = this.parseDays(opts.durationDays, 60) ?? r.durationDays;
@@ -410,6 +507,7 @@ export class AdminMonetizationService {
   }
 
   private async proPlan(): Promise<MonetizationPlan | null> {
+    await this.ensureDefaultPlans();
     return this.prisma.monetizationPlan.findFirst({ where: { kind: "subscription", isActive: true } });
   }
 
@@ -465,7 +563,9 @@ export class AdminMonetizationService {
     const current = await this.prisma.subscription.findMany({ where: { userId } });
     if (current.some((s) => s.status === "active")) throw new ConflictError("Esta conta já tem acesso Pro.");
     const plan = await this.proPlan();
-    if (!plan) throw new InvalidStateError("O plano Pro não está ativo.");
+    if (!plan) {
+      throw new InvalidStateError("O plano PASSA Pro está desativado. Ative-o em Monetização → Planos e preços.");
+    }
     const now = this.clock.now();
     const days = this.parseDays(opts.durationDays, 365) ?? plan.durationDays;
     const pending = current.find((s) => s.status === "pending");
@@ -530,5 +630,291 @@ export class AdminMonetizationService {
       reason: reason.trim() || "Terminado pela administração.",
     });
     return subscriptionView(updated);
+  }
+
+  async featuredListingIds(query: {
+    mode?: string;
+    category?: string;
+    q?: string;
+    limit?: number;
+  }) {
+    const settings = await this.settingsRow();
+    if (!settings.promotionsEnabled) return [];
+    const all = await this.sweepPromotions();
+    const active = all.filter((r) => r.status === "active" && r.startsAt);
+    const listingIds = [...new Set(active.map((r) => r.listingId))];
+    const listings = listingIds.length
+      ? await this.prisma.listing.findMany({
+          where: { id: { in: listingIds } },
+          select: { id: true, title: true, category: true, status: true },
+        })
+      : [];
+    const listingById = new Map(listings.map((l) => [l.id, l]));
+    const candidates = active.flatMap((r) => {
+      const listing = listingById.get(r.listingId);
+      if (!listing || !r.startsAt) return [];
+      return [
+        {
+          listingId: r.listingId,
+          startsAt: r.startsAt,
+          category: listing.category,
+          title: listing.title,
+          listingStatus: listing.status,
+        },
+      ];
+    });
+    return selectFeaturedListingIds(candidates, { ...query, homeSlots: settings.homeSlots });
+  }
+
+  async windowsFor(listingId: string, actorId: string, isAdmin: boolean) {
+    const listing = await this.prisma.listing.findUnique({ where: { id: listingId }, select: { sellerId: true } });
+    if (!listing) throw new NotFoundError("Anúncio não encontrado.");
+    if (!isAdmin && listing.sellerId !== actorId) throw new ForbiddenError("Só o anunciante vê as janelas de destaque.");
+    const rows = await this.prisma.promotionRequest.findMany({ where: { listingId } });
+    return promotionWindows(rows).map((w) => ({
+      startsAt: w.startsAt.toISOString(),
+      expiresAt: w.expiresAt.toISOString(),
+      status: w.status,
+    }));
+  }
+
+  async requestPromotion(userId: string, listingId: string, planId: string) {
+    const settings = await this.settingsRow();
+    if (!settings.promotionsEnabled) {
+      throw new InvalidStateError("Os destaques estão temporariamente indisponíveis.");
+    }
+    const listing = await this.prisma.listing.findUnique({
+      where: { id: listingId },
+      include: { seller: { select: { status: true } } },
+    });
+    if (!listing) throw new NotFoundError("Anúncio não encontrado.");
+    if (listing.sellerId !== userId) throw new ForbiddenError("Só pode destacar os seus próprios anúncios.");
+    if (listing.status !== "published") throw new InvalidStateError("Só anúncios publicados podem ser destacados.");
+    if (listing.seller.status !== "ACTIVE") throw new InvalidStateError("A conta do anunciante não está activa.");
+
+    await this.sweepPromotions();
+    const open = await this.prisma.promotionRequest.findFirst({
+      where: { listingId, status: { in: ["pending", "approved", "active"] } },
+    });
+    if (open) throw new ConflictError("Este anúncio já tem um pedido de destaque em curso.");
+
+    const plan = await this.prisma.monetizationPlan.findUnique({ where: { id: planId } });
+    if (!plan || plan.kind !== "promotion" || !plan.isActive) throw new NotFoundError("Plano não encontrado.");
+
+    const now = this.clock.now();
+    const paid = paidCheckoutEnabled(settings) && plan.priceAoa > 0;
+    const created = await this.prisma.promotionRequest.create({
+      data: {
+        id: this.ids.next(),
+        listingId,
+        userId,
+        planId: plan.id,
+        planName: plan.name,
+        planPriceAoa: plan.priceAoa,
+        durationDays: plan.durationDays,
+        status: "pending",
+        paymentMethod: paid ? "provider" : "none",
+        paymentStatus: paid ? "pending" : "not_required",
+        promotionSource: paid ? "paid" : "free_pilot",
+        requestedAt: now,
+      },
+    });
+
+    if (!paid) return { kind: "free" as const, target: promotionView(created) };
+
+    const existing = await this.prisma.paymentRecord.findFirst({
+      where: { targetType: "promotion", targetId: created.id },
+    });
+    if (existing) return { kind: "payment" as const, target: promotionView(created), payment: paymentView(existing) };
+
+    const reference = sandboxReference(created.id);
+    const payment = await this.prisma.paymentRecord.create({
+      data: {
+        id: this.ids.next(),
+        userId,
+        targetType: "promotion",
+        targetId: created.id,
+        description: `${plan.name} — destaque de anúncio`,
+        amountAoa: plan.priceAoa,
+        currency: "AOA",
+        provider: settings.paymentProvider,
+        method: "reference",
+        entity: settings.referenceEntity,
+        reference,
+        providerReference: `sbx_${reference}`,
+        status: "pending",
+        expiresAt: new Date(now.getTime() + settings.referenceTtlHours * 3_600_000),
+      },
+    });
+    await this.log(userId, "payment.created", "payment", payment.id, {
+      reference: payment.reference,
+      amountAoa: payment.amountAoa,
+      provider: payment.provider,
+    });
+    return { kind: "payment" as const, target: promotionView(created), payment: paymentView(payment) };
+  }
+
+  async cancelRequest(userId: string, id: string) {
+    const r = await this.prisma.promotionRequest.findUnique({ where: { id } });
+    if (!r) throw new NotFoundError("Pedido não encontrado.");
+    if (r.userId !== userId) throw new ForbiddenError("Este pedido não lhe pertence.");
+    if (r.status !== "pending") throw new InvalidStateError("Só pode cancelar pedidos pendentes.");
+    const updated = await this.prisma.promotionRequest.update({
+      where: { id },
+      data: { status: "cancelled", endedReason: "Cancelado pelo anunciante." },
+    });
+    return promotionView(updated);
+  }
+
+  async getPayment(userId: string, id: string, isAdmin: boolean) {
+    await this.sweepPayments();
+    const p = await this.prisma.paymentRecord.findUnique({ where: { id } });
+    if (!p) throw new NotFoundError("Pagamento não encontrado.");
+    if (p.userId !== userId && !isAdmin) throw new ForbiddenError("Este pagamento não lhe pertence.");
+    return paymentView(p);
+  }
+
+  async listMinePayments(userId: string) {
+    await this.sweepPayments();
+    const rows = await this.prisma.paymentRecord.findMany({ where: { userId }, orderBy: { createdAt: "desc" } });
+    return rows.map(paymentView);
+  }
+
+  async cancelPayment(userId: string, id: string) {
+    const p = await this.prisma.paymentRecord.findUnique({ where: { id } });
+    if (!p) throw new NotFoundError("Pagamento não encontrado.");
+    if (p.userId !== userId) throw new ForbiddenError("Este pagamento não lhe pertence.");
+    if (p.status !== "pending") throw new InvalidStateError("Só pode cancelar pagamentos pendentes.");
+    const updated = await this.prisma.paymentRecord.update({ where: { id }, data: { status: "rejected" } });
+    await this.closeAfterPayment(p.targetType, p.targetId, "rejected", "Pagamento cancelado pelo utilizador.");
+    await this.log(userId, "payment.rejected", "payment", id, { reference: p.reference });
+    return paymentView(updated);
+  }
+
+  async simulateSandboxPayment(input: { entity: string; reference: string; amountAoa: number; pin: string }) {
+    if (!/^\d{4}$/.test(input.pin)) throw new AdminValidationError("O PIN tem 4 dígitos.", "pin");
+    const settings = await this.settingsRow();
+    if (settings.paymentProvider !== "sandbox") {
+      throw new InvalidStateError("O simulador só funciona no ambiente de testes.");
+    }
+    await this.sweepPayments();
+    const reference = input.reference.replace(/\s/g, "");
+    const p = await this.prisma.paymentRecord.findFirst({
+      where: { entity: input.entity, reference, provider: "sandbox" },
+    });
+    if (!p) throw new NotFoundError("Entidade ou referência inválida.");
+    if (p.status === "expired" || (p.status === "pending" && p.expiresAt <= this.clock.now())) {
+      throw new InvalidStateError("Esta referência expirou.");
+    }
+    if (p.status !== "pending") throw new InvalidStateError("Esta referência já foi paga.");
+    if (p.amountAoa !== input.amountAoa) throw new AdminValidationError("O montante não corresponde à referência.", "amount");
+
+    const now = this.clock.now();
+    const updated = await this.prisma.paymentRecord.update({
+      where: { id: p.id },
+      data: { status: "verified", paidAt: now },
+    });
+    await this.log("system", "payment.verified", "payment", p.id, {
+      reference: p.reference,
+      amountAoa: p.amountAoa,
+      provider: "sandbox",
+    });
+    try {
+      await this.activateAfterPayment(p.targetType, p.targetId);
+    } catch (error) {
+      await this.prisma.paymentRecord.update({ where: { id: p.id }, data: { status: "refunded" } });
+      await this.closeAfterPayment(p.targetType, p.targetId, "refunded", error instanceof Error ? error.message : "Reembolsado.");
+      throw error;
+    }
+    return paymentView(updated);
+  }
+
+  private async sweepPayments() {
+    const now = this.clock.now();
+    const pending = await this.prisma.paymentRecord.findMany({ where: { status: "pending" } });
+    for (const p of pending) {
+      if (p.expiresAt > now) continue;
+      await this.prisma.paymentRecord.update({ where: { id: p.id }, data: { status: "expired" } });
+      await this.closeAfterPayment(p.targetType, p.targetId, "rejected", "A referência de pagamento expirou.");
+      await this.log("system", "payment.expired", "payment", p.id, { reference: p.reference });
+    }
+  }
+
+  private async closeAfterPayment(targetType: string, targetId: string, paymentStatus: "rejected" | "refunded", reason: string) {
+    const now = this.clock.now();
+    if (targetType === "promotion") {
+      const r = await this.prisma.promotionRequest.findUnique({ where: { id: targetId } });
+      if (!r || !isOpenPromotion(r.status)) return;
+      await this.prisma.promotionRequest.update({
+        where: { id: r.id },
+        data: {
+          paymentStatus,
+          status: "cancelled",
+          endedReason: reason,
+          expiresAt: r.status === "active" ? now : r.expiresAt,
+        },
+      });
+      return;
+    }
+    const s = await this.prisma.subscription.findUnique({ where: { id: targetId } });
+    if (!s || (s.status !== "pending" && s.status !== "active")) return;
+    await this.prisma.subscription.update({
+      where: { id: s.id },
+      data: {
+        paymentStatus,
+        status: "cancelled",
+        note: reason,
+        expiresAt: s.status === "active" ? now : s.expiresAt,
+      },
+    });
+  }
+
+  private async activateAfterPayment(targetType: string, targetId: string) {
+    const now = this.clock.now();
+    if (targetType === "promotion") {
+      const r = await this.prisma.promotionRequest.findUnique({ where: { id: targetId } });
+      if (!r) throw new NotFoundError("Pedido não encontrado.");
+      const listing = await this.prisma.listing.findUnique({
+        where: { id: r.listingId },
+        include: { seller: { select: { status: true } } },
+      });
+      if (!listing || listing.status !== "published" || listing.seller.status !== "ACTIVE") {
+        throw new InvalidStateError("O anúncio deixou de estar publicado; o pagamento deve ser reembolsado.");
+      }
+      const verified = await this.prisma.paymentRecord.findFirst({
+        where: { targetType: "promotion", targetId, status: "verified", amountAoa: r.planPriceAoa },
+      });
+      if (!verified) throw new ForbiddenError("Não existe um pagamento verificado para este pedido.");
+      await this.prisma.promotionRequest.update({
+        where: { id: r.id },
+        data: {
+          paymentStatus: "verified",
+          status: "active",
+          startsAt: now,
+          expiresAt: new Date(now.getTime() + r.durationDays * DAY_MS),
+          reviewedAt: now,
+          reviewNote: "Ativado automaticamente após pagamento confirmado.",
+        },
+      });
+      await this.log("system", "promotion.activated", "promotion_request", r.id, {
+        listingId: r.listingId,
+        amountAoa: r.planPriceAoa,
+      });
+      return;
+    }
+    const s = await this.prisma.subscription.findUnique({ where: { id: targetId } });
+    if (!s) throw new NotFoundError("Pedido não encontrado.");
+    await this.prisma.subscription.update({
+      where: { id: s.id },
+      data: {
+        paymentStatus: "verified",
+        status: "active",
+        startsAt: now,
+        expiresAt: new Date(now.getTime() + s.durationDays * DAY_MS),
+        reviewedAt: now,
+        note: "Ativado automaticamente após pagamento confirmado.",
+      },
+    });
+    await this.log("system", "subscription.activated", "subscription", s.id, { userId: s.userId });
   }
 }

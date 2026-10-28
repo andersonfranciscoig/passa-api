@@ -7,6 +7,7 @@ import { z } from "zod";
 import { AppModule } from "./app.module";
 import { AppConfig } from "./config/app-config";
 import { DomainErrorFilter } from "./shared/presentation/http/domain-error.filter";
+import { UnhandledErrorFilter } from "./shared/presentation/http/unhandled-error.filter";
 import { setupSwagger } from "./shared/presentation/http/setup-swagger";
 
 z.config(z.locales.pt());
@@ -16,7 +17,7 @@ async function bootstrap() {
   const config = app.get(AppConfig);
 
   app.setGlobalPrefix("api/v1");
-  app.useGlobalFilters(new DomainErrorFilter());
+  app.useGlobalFilters(new UnhandledErrorFilter(), new DomainErrorFilter());
   app.enableCors({ origin: config.corsOrigins, credentials: true });
   app.enableShutdownHooks();
 
