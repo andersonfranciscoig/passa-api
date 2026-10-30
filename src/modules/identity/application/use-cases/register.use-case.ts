@@ -60,6 +60,7 @@ export class RegisterUseCase implements UseCase<RegisterInput, RegisterOutput> {
       neighborhood: input.neighborhood?.trim() || undefined,
       role: "USER",
       status: "ACTIVE",
+      lastSeenAt: now,
       createdAt: now,
       updatedAt: now,
     };

@@ -4,6 +4,7 @@ import type { Response } from "express";
 import { DomainError, type DomainErrorKind } from "../../domain/domain-error";
 
 const STATUS: Record<DomainErrorKind, HttpStatus> = {
+  bad_request: HttpStatus.BAD_REQUEST,
   validation: HttpStatus.UNPROCESSABLE_ENTITY,
   conflict: HttpStatus.CONFLICT,
   unauthorized: HttpStatus.UNAUTHORIZED,

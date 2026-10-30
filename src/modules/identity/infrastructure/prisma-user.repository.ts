@@ -5,6 +5,8 @@ import { PrismaService } from "../../../shared/infrastructure/database/prisma.se
 import type { UserRepository } from "../domain/repositories";
 import type { User } from "../domain/user";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const toDomain = (row: UserRow): User => ({
   id: row.id,
   email: row.email,
@@ -17,6 +19,7 @@ const toDomain = (row: UserRow): User => ({
   bio: row.bio ?? undefined,
   avatarUrl: row.avatarUrl ?? undefined,
   phoneVerifiedAt: row.phoneVerifiedAt ?? undefined,
+  lastSeenAt: row.lastSeenAt ?? undefined,
   role: row.role,
   status: row.status,
   createdAt: row.createdAt,
@@ -35,6 +38,7 @@ const toRow = (user: User): Prisma.UserUncheckedCreateInput => ({
   bio: user.bio ?? null,
   avatarUrl: user.avatarUrl ?? null,
   phoneVerifiedAt: user.phoneVerifiedAt ?? null,
+  lastSeenAt: user.lastSeenAt ?? null,
   role: user.role as UserRole,
   status: user.status as UserStatus,
   createdAt: user.createdAt,
@@ -46,6 +50,8 @@ export class PrismaUserRepository implements UserRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findById(id: string) {
+    // Um id que não é UUID não existe (e o Prisma rejeitaria a consulta numa coluna uuid).
+    if (!UUID.test(id)) return null;
     const row = await this.prisma.user.findUnique({ where: { id } });
     return row ? toDomain(row) : null;
   }
@@ -79,7 +85,16 @@ export class PrismaUserRepository implements UserRepository {
         role: data.role,
         status: data.status,
         updatedAt: data.updatedAt,
+        // lastSeenAt fica de fora: é escrito só por touchLastSeen, para um objeto antigo não o recuar.
       },
+    });
+  }
+
+  async touchLastSeen(id: string, at: Date, staleBefore?: Date) {
+    if (!UUID.test(id)) return;
+    await this.prisma.user.updateMany({
+      where: staleBefore ? { id, OR: [{ lastSeenAt: null }, { lastSeenAt: { lt: staleBefore } }] } : { id },
+      data: { lastSeenAt: at },
     });
   }
 }

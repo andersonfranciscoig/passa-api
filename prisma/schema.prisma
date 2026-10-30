@@ -36,6 +36,7 @@ model User {
   bio             String?
   avatarUrl       String?    @map("avatar_url")
   phoneVerifiedAt DateTime?  @map("phone_verified_at") @db.Timestamptz(3)
+  lastSeenAt      DateTime?  @map("last_seen_at") @db.Timestamptz(3)
   role            UserRole   @default(USER)
   status          UserStatus @default(ACTIVE)
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -55,7 +56,71 @@ model User {
   sellerConversations Conversation[] @relation("ConversationSeller")
   sentMessages        Message[]
 
+  reviewsReceived   ProfileReview[]     @relation("ProfileReviewTarget")
+  reviewsWritten    ProfileReview[]     @relation("ProfileReviewAuthor")
+  likesReceived     ProfileLike[]       @relation("ProfileLikeTarget")
+  likesGiven        ProfileLike[]       @relation("ProfileLikeUser")
+  profileDailyStats ProfileDailyStats[]
+  profileViewers    ProfileViewer[]
+
   @@map("users")
+}
+
+/// Avaliação (1–5) de um perfil por outra conta. Uma por autor e perfil.
+model ProfileReview {
+  id            String   @id @db.Uuid
+  profileUserId String   @map("profile_user_id") @db.Uuid
+  authorId      String   @map("author_id") @db.Uuid
+  rating        Int
+  comment       String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  profileUser User @relation("ProfileReviewTarget", fields: [profileUserId], references: [id], onDelete: Cascade)
+  author      User @relation("ProfileReviewAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@unique([profileUserId, authorId], map: "profile_reviews_profile_author")
+  @@index([profileUserId], map: "profile_reviews_profile")
+  @@map("profile_reviews")
+}
+
+/// "Gosto" num perfil. Unicidade (profileUserId, userId).
+model ProfileLike {
+  profileUserId String   @map("profile_user_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  profileUser User @relation("ProfileLikeTarget", fields: [profileUserId], references: [id], onDelete: Cascade)
+  user        User @relation("ProfileLikeUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([profileUserId, userId])
+  @@map("profile_likes")
+}
+
+/// Visualizações de um perfil num dia civil (Africa/Luanda), já sem repetições do mesmo visitante.
+model ProfileDailyStats {
+  userId String   @map("user_id") @db.Uuid
+  day    DateTime @db.Date
+  views  Int      @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day])
+  @@map("profile_daily_stats")
+}
+
+/// Visitante de um perfil num dia. viewerKey é a conta ou um hash anónimo (IP + user-agent).
+model ProfileViewer {
+  userId    String   @map("user_id") @db.Uuid
+  viewerKey String   @map("viewer_key") @db.VarChar(64)
+  day       DateTime @db.Date
+  firstSeen DateTime @default(now()) @map("first_seen") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, viewerKey, day])
+  @@index([userId, day], map: "profile_viewers_user_day")
+  @@map("profile_viewers")
 }
 
 /// Código enviado por email para confirmar o telemóvel do perfil.

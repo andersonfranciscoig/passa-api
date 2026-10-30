@@ -17,6 +17,8 @@ export interface User {
   readonly bio?: string;
   readonly avatarUrl?: string;
   readonly phoneVerifiedAt?: Date;
+  /** Última atividade autenticada (atualizada no máximo a cada 2 minutos). */
+  readonly lastSeenAt?: Date;
   readonly role: UserRole;
   readonly status: UserStatus;
   readonly createdAt: Date;

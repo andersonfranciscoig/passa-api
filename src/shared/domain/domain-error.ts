@@ -1,4 +1,5 @@
 export type DomainErrorKind =
+  | "bad_request"
   | "validation"
   | "conflict"
   | "unauthorized"

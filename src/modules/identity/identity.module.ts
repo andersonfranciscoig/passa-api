@@ -9,6 +9,7 @@ import { Clock } from "../../shared/domain/clock";
 import { IdGenerator } from "../../shared/domain/id-generator";
 import { provideUseCase } from "../../shared/infrastructure/provide";
 import { AccessTokenIssuer } from "./application/ports/access-token-issuer";
+import { LastSeenTracker } from "./application/last-seen-tracker";
 import { AuthenticateUseCase } from "./application/use-cases/authenticate.use-case";
 import { GetCurrentUserUseCase } from "./application/use-cases/get-current-user.use-case";
 import { RegisterUseCase } from "./application/use-cases/register.use-case";
@@ -57,15 +58,17 @@ import { OptionalAuthGuard } from "./presentation/http/guards/optional-auth.guar
       useFactory: (jwt: JwtService, config: AppConfig) =>
         new JwtAccessTokenIssuer(jwt, config.jwtAccessTtlSeconds),
     },
+    provideUseCase(LastSeenTracker, [UserRepository, Clock]),
     {
       provide: AuthenticateUseCase,
-      inject: [UserRepository, PasswordHasher, AccessTokenIssuer, AppConfig],
+      inject: [UserRepository, PasswordHasher, AccessTokenIssuer, AppConfig, LastSeenTracker],
       useFactory: (
         users: UserRepository,
         hasher: PasswordHasher,
         tokens: AccessTokenIssuer,
         config: AppConfig,
-      ) => new AuthenticateUseCase(users, hasher, tokens, config.jwtAccessTtlSeconds),
+        lastSeen: LastSeenTracker,
+      ) => new AuthenticateUseCase(users, hasher, tokens, config.jwtAccessTtlSeconds, lastSeen),
     },
     {
       provide: RegisterUseCase,
@@ -90,6 +93,6 @@ import { OptionalAuthGuard } from "./presentation/http/guards/optional-auth.guar
     OptionalAuthGuard,
     AdminGuard,
   ],
-  exports: [AuthGuard, OptionalAuthGuard, AdminGuard, AccessTokenIssuer, UserRepository],
+  exports: [AuthGuard, OptionalAuthGuard, AdminGuard, AccessTokenIssuer, UserRepository, LastSeenTracker],
 })
 export class IdentityModule {}

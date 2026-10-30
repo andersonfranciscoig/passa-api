@@ -9,6 +9,7 @@ import { FavoritesModule } from "./modules/favorites";
 import { IdentityModule } from "./modules/identity";
 import { MailModule } from "./modules/mail/mail.module";
 import { MessagingModule } from "./modules/messaging";
+import { ProfilesModule } from "./modules/profiles";
 import { ResearchModule } from "./modules/research";
 import { CoreModule } from "./shared/infrastructure/core.module";
 import { DatabaseModule } from "./shared/infrastructure/database/database.module";
@@ -29,6 +30,7 @@ import { ApiStatusController, HealthController } from "./shared/presentation/htt
     AnalyticsModule,
     FavoritesModule,
     MessagingModule,
+    ProfilesModule,
     AdminModule,
   ],
   controllers: [HealthController, ApiStatusController],

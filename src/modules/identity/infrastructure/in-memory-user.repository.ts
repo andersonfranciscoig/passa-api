@@ -21,4 +21,12 @@ export class InMemoryUserRepository implements UserRepository {
     if (i === -1) this.items.push(user);
     else this.items[i] = user;
   }
+
+  async touchLastSeen(id: string, at: Date, staleBefore?: Date) {
+    const i = this.items.findIndex((u) => u.id === id);
+    if (i === -1) return;
+    const current = this.items[i].lastSeenAt;
+    if (staleBefore && current && current >= staleBefore) return;
+    this.items[i] = { ...this.items[i], lastSeenAt: at };
+  }
 }

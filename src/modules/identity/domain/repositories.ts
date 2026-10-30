@@ -5,6 +5,11 @@ export abstract class UserRepository {
   abstract findByEmail(email: string): Promise<User | null>;
   abstract findByPhone(phone: string): Promise<User | null>;
   abstract save(user: User): Promise<void>;
+  /**
+   * Marca a última atividade. Com `staleBefore`, só escreve se o valor guardado
+   * for nulo ou anterior a essa data (evita uma escrita por pedido).
+   */
+  abstract touchLastSeen(id: string, at: Date, staleBefore?: Date): Promise<void>;
 }
 
 export interface ContactVerification {

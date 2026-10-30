@@ -3,6 +3,7 @@ import { AccountSuspendedError, InvalidCredentialsError } from "../../domain/err
 import type { PasswordHasher, UserRepository } from "../../domain/repositories";
 import { normalizeEmail } from "../../domain/user";
 import type { AccessTokenIssuer, AuthTokens } from "../ports/access-token-issuer";
+import type { LastSeenTracker } from "../last-seen-tracker";
 import { toUserView, type UserView } from "../user-view";
 
 export interface AuthenticateInput {
@@ -21,6 +22,7 @@ export class AuthenticateUseCase implements UseCase<AuthenticateInput, Authentic
     private readonly hasher: PasswordHasher,
     private readonly tokens: AccessTokenIssuer,
     private readonly accessTtlSeconds: number,
+    private readonly lastSeen?: LastSeenTracker,
   ) {}
 
   async execute({ email, password }: AuthenticateInput): Promise<AuthenticateOutput> {
@@ -41,6 +43,7 @@ export class AuthenticateUseCase implements UseCase<AuthenticateInput, Authentic
       email: user.email,
       role: user.role,
     });
+    void this.lastSeen?.touch(user.id, { force: true });
     return {
       user: toUserView(user),
       tokens: { accessToken, tokenType: "Bearer", expiresIn: this.accessTtlSeconds },
